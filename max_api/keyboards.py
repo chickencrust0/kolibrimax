@@ -1,0 +1,190 @@
+"""
+max_api/keyboards.py — сборка inline-клавиатур MAX.
+
+ВАЖНОЕ ОТЛИЧИЕ ОТ TELEGRAM: у MAX нет отдельного «reply-клавиатура» —
+постоянного меню кнопок под полем ввода (см. dev.max.ru/docs-api,
+раздел «Клавиатура для чат-бота»: единственный вид клавиатуры —
+inline, прикреплённая к конкретному сообщению). Поэтому все прежние
+ReplyKeyboardMarkup-меню (расписание/ДЗ/баланс и т.д.) в этом боте
+реализованы как inline-клавиатуры, прикреплённые к сообщению меню, а
+не как постоянная панель.
+
+Ограничения MAX: до 210 кнопок, до 30 рядов, до 7 кнопок в ряду
+(до 3, если это link/open_app/request_geo_location/request_contact).
+"""
+
+from typing import Any, Dict, List, Optional
+
+Button = Dict[str, Any]
+Row = List[Button]
+Keyboard = List[Row]
+
+
+def btn_callback(text: str, payload: str, intent: Optional[str] = None) -> Button:
+    btn: Button = {"type": "callback", "text": text, "payload": payload}
+    if intent:
+        btn["intent"] = intent  # default | positive | negative
+    return btn
+
+
+def btn_link(text: str, url: str) -> Button:
+    return {"type": "link", "text": text, "url": url}
+
+
+def btn_request_contact(text: str) -> Button:
+    return {"type": "request_contact", "text": text}
+
+
+def btn_message(text: str) -> Button:
+    """Кнопка, при нажатии отправляющая боту текстовое сообщение (аналог
+    reply-кнопки в Telegram: пользователь фактически "печатает" text)."""
+    return {"type": "message", "text": text}
+
+
+def keyboard(rows: Keyboard) -> Dict[str, Any]:
+    """Оборачивает ряды кнопок во вложение inline_keyboard для attachments=[...]."""
+    return {"type": "inline_keyboard", "payload": {"buttons": rows}}
+
+
+def single_row(*buttons: Button) -> Keyboard:
+    return [[b] for b in buttons] if len(buttons) > 1 else [[buttons[0]]] if buttons else []
+
+
+# ==================== ГОТОВЫЕ КЛАВИАТУРЫ БОТА ====================
+
+def request_phone_keyboard() -> List[Dict[str, Any]]:
+    return [keyboard([[btn_request_contact("📱 Поделиться контактом")]])]
+
+
+def teacher_menu_keyboard() -> List[Dict[str, Any]]:
+    return [keyboard([
+        [btn_callback("📅 Моё расписание", "menu:teacher:schedule")],
+        [btn_callback("📊 Отчёт по урокам", "menu:teacher:report")],
+        [btn_callback("🆘 Связаться с менеджером", "menu:support")],
+        [btn_callback("🚪 Выйти из профиля", "menu:logout")],
+    ])]
+
+
+def parent_menu_keyboard() -> List[Dict[str, Any]]:
+    return [keyboard([
+        [btn_callback("📅 Расписание", "menu:parent:schedule")],
+        [btn_callback("📚 Домашнее задание", "menu:parent:homework")],
+        [btn_callback("💰 Баланс", "menu:parent:balance")],
+        [btn_callback("🔁 Заявка на перенос", "menu:parent:transfer")],
+        [btn_callback("🆘 Связаться с менеджером", "menu:support")],
+        [btn_callback("🚪 Выйти из профиля", "menu:logout")],
+    ])]
+
+
+def manager_menu_keyboard() -> List[Dict[str, Any]]:
+    return [keyboard([
+        [btn_callback("📢 Рассылка", "menu:manager:broadcast")],
+        [btn_callback("🔁 Заявки на перенос", "menu:manager:transfers")],
+        [btn_callback("📊 Сводка за период", "menu:manager:summary")],
+        [btn_callback("❌ Неявки за сегодня", "menu:manager:absences")],
+        [btn_callback("🆘 Обращения", "menu:manager:support")],
+        [btn_callback("🚪 Выйти из профиля", "menu:logout")],
+    ])]
+
+
+def lesson_action_keyboard(lesson_id: Any) -> List[Dict[str, Any]]:
+    return [keyboard([
+        [btn_callback("✅ Отметить как проведённый", f"close:{lesson_id}")],
+        [btn_callback("📝 Прикрепить ДЗ", f"hw:{lesson_id}")],
+        [btn_callback("🔁 Заявка на перенос", f"transfer:{lesson_id}")],
+    ])]
+
+
+def lesson_attendance_keyboard(
+    lesson_id: Any,
+    students: List[Any],
+    marked: Optional[set] = None,
+    absent: Optional[set] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Карточка занятия у преподавателя: на каждого ученика ряд из двух
+    кнопок — «пришёл» и «не пришёл» — плюс общие действия по занятию.
+
+    students — список (client_id, имя). marked — уже отмеченные
+    присутствующими (пишется в CRM). absent — отмеченные неявкой
+    (хранится в БД бота; в CRM уходит только решением менеджера).
+    """
+    marked = marked or set()
+    absent = absent or set()
+    rows: Keyboard = []
+    for client_id, name in students:
+        short = name if len(name) <= 18 else name[:17] + "…"
+        if client_id in marked:
+            rows.append([
+                btn_callback(f"✅ {short}", f"unatt:{lesson_id}:{client_id}", intent="positive"),
+                btn_callback("❌", f"abs:{lesson_id}:{client_id}"),
+            ])
+        elif client_id in absent:
+            rows.append([
+                btn_callback("✅", f"att:{lesson_id}:{client_id}"),
+                btn_callback(f"❌ {short}", f"unabs:{lesson_id}:{client_id}", intent="negative"),
+            ])
+        else:
+            rows.append([
+                btn_callback(f"✅ {short}", f"att:{lesson_id}:{client_id}"),
+                btn_callback("❌", f"abs:{lesson_id}:{client_id}"),
+            ])
+
+    rows.append([btn_callback("📝 Прикрепить ДЗ", f"hw:{lesson_id}")])
+    rows.append([btn_callback("🔁 Заявка на перенос", f"transfer:{lesson_id}")])
+    return [keyboard(rows)]
+
+
+def absence_decision_keyboard(absence_id: Any) -> List[Dict[str, Any]]:
+    """Решение менеджера по неявке: списать занятие или признать
+    причину уважительной."""
+    return [keyboard([[
+        btn_callback("🔥 Занятие сгорело", f"burn:{absence_id}", intent="negative"),
+        btn_callback("🙏 Уважительная", f"excuse:{absence_id}", intent="positive"),
+    ]])]
+
+
+def support_user_keyboard(ticket_id: Any) -> List[Dict[str, Any]]:
+    return [keyboard([[btn_callback("🔒 Завершить обращение", f"sup_close:{ticket_id}")]])]
+
+
+def support_manager_keyboard(ticket_id: Any) -> List[Dict[str, Any]]:
+    return [keyboard([
+        [btn_callback("✍️ Ответить", f"sup_reply:{ticket_id}")],
+        [btn_callback("🔒 Закрыть обращение", f"sup_close:{ticket_id}")],
+    ])]
+
+
+def transfer_decision_keyboard(request_id: Any) -> List[Dict[str, Any]]:
+    return [keyboard([
+        [
+            btn_callback("✅ Подтвердить", f"transfer_ok:{request_id}", intent="positive"),
+            btn_callback("❌ Отклонить", f"transfer_no:{request_id}", intent="negative"),
+        ]
+    ])]
+
+
+def confirm_logout_keyboard() -> List[Dict[str, Any]]:
+    return [keyboard([[
+        btn_callback("✅ Да, выйти", "logout:confirm", intent="positive"),
+        btn_callback("❌ Отмена", "logout:cancel", intent="negative"),
+    ]])]
+
+
+def schedule_period_keyboard() -> List[Dict[str, Any]]:
+    return [keyboard([
+        [btn_callback("📅 Сегодня", "schedule:today")],
+        [btn_callback("📅 Завтра", "schedule:tomorrow")],
+        [btn_callback("📅 Неделя", "schedule:week")],
+        [btn_callback("📅 Месяц", "schedule:month")],
+        [btn_callback("📅 Свой период", "schedule:custom")],
+    ])]
+
+
+def recipients_keyboard() -> List[Dict[str, Any]]:
+    return [keyboard([
+        [btn_callback("Преподавателям", "broadcast:teacher")],
+        [btn_callback("Родителям", "broadcast:parent")],
+        [btn_callback("Всем", "broadcast:all")],
+        [btn_callback("Отмена", "broadcast:cancel")],
+    ])]
