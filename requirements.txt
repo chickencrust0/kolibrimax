@@ -1,0 +1,9 @@
+aiohttp>=3.9,<4
+python-dotenv>=1.0,<2
+APScheduler>=3.10,<4
+certifi>=2024.2.2
+tzdata; sys_platform == "win32"
+
+# Только для impulse_introspect.py (одноразовый скрипт снятия схемы,
+# самому боту не нужен в рантайме)
+requests>=2.31,<3
