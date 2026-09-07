@@ -366,26 +366,54 @@ async def _toggle_attendance(
             f"group_id={lesson.get('group_id')}"
         )
 
-    # Время занятия нужно только для targetValues при списании (burn_one);
-    # в теле check_visits/check оно не участвует.
     raw = lesson.get("_raw") or {}
     minutes_begin = raw.get(settings.IMPULSE_FIELD_SCHEDULE_MINUTES_BEGIN)
     minutes_end = raw.get(settings.IMPULSE_FIELD_SCHEDULE_MINUTES_END)
 
+    # Запасной расчёт минут из времени занятия.
+    #
+    # Без него вся привязка к расписанию молча превратилась бы в пустые
+    # поля: _raw есть не у всякого занятия (например, у пришедшего из
+    # кеша), а minutesBegin — единственное, что отличает два занятия
+    # одной группы в один день.
+    if minutes_begin is None:
+        minutes_begin = _minutes_of(lesson.get("time_from"))
+    if minutes_end is None:
+        minutes_end = _minutes_of(lesson.get("time_to"))
+    if minutes_begin is None:
+        logger.warning(
+            f"⚠️ У занятия {lesson_id!r} не определено время начала — "
+            f"CRM не сможет понять, какое занятие отмечают "
+            f"(time_from={lesson.get('time_from')!r})"
+        )
+
+    # Привязка к конкретному занятию расписания нужна ОБЕИМ операциям.
+    #
+    # Прежний комментарий утверждал, что minutes в теле check не
+    # участвуют — это было неверно, и именно из-за этого CRM отвечала
+    # «Пожалуйста, отметьте занятие через раздел "Отметка посещений" по
+    # расписанию»: по группе и полуночи она не могла определить, какое
+    # из занятий дня отмечают.
+    target_values = {
+        "minutesBegin": minutes_begin,
+        "minutesEnd": minutes_end,
+        "date": date_ts,
+    }
+
     try:
         if present:
-            # account передаётся ЦЕЛИКОМ (так его ждёт check_visits/check),
-            # minutes/hall в теле check не участвуют — они нужны только
-            # для targetValues при списании.
-            await impulse.check_visit(client_id, account, target, date_ts)
+            # account и target передаются ЦЕЛИКОМ (так их ждёт
+            # check_visits/check), плюс schedule и targetValues —
+            # они указывают на конкретное занятие.
+            await impulse.check_visit(
+                client_id, account, target, date_ts,
+                schedule=raw or None,
+                target_values=target_values,
+            )
         else:
             await impulse.burn_visit(
                 client_id, account, target, date_ts,
-                target_values={
-                    "minutesBegin": minutes_begin,
-                    "minutesEnd": minutes_end,
-                    "date": date_ts,
-                },
+                target_values=target_values,
             )
     except ImpulseCRMError as e:
         logger.error(f"❌ CRM отклонила отметку посещения: {e}")
@@ -401,6 +429,21 @@ async def _toggle_attendance(
 
     await _refresh_attendance_card(callback, db, impulse, lesson, lesson_id, date_ts)
     await _reply(callback, "✅ Отмечено присутствие" if present else "↩️ Отметка снята")
+
+
+def _minutes_of(value) -> Any:
+    """'16:00' или '2026-09-08 16:00:00' -> 960 минут от полуночи."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    tail = text.replace("T", " ").split(" ")[-1]
+    parts = tail.split(":")
+    if len(parts) < 2:
+        return None
+    try:
+        return int(parts[0]) * 60 + int(parts[1])
+    except ValueError:
+        return None
 
 
 async def _refresh_attendance_card(
