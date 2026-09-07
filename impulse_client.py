@@ -1546,6 +1546,8 @@ class ImpulseCRMClient:
         target: Dict[str, Any],
         date_ts: int,
         force: bool = False,
+        schedule: Optional[Dict[str, Any]] = None,
+        target_values: Optional[Dict[str, Any]] = None,
     ) -> Any:
         r"""
         Отметить клиента присутствующим.
@@ -1593,6 +1595,35 @@ class ImpulseCRMClient:
             "target": target,
             "date": date_ts,
         }
+
+        # ПРИВЯЗКА К КОНКРЕТНОМУ ЗАНЯТИЮ РАСПИСАНИЯ.
+        #
+        # Без неё CRM отвечает отказом:
+        #     {"success": false, "message": "Пожалуйста, отметьте занятие
+        #      через раздел \"Отметка посещений\" по расписанию."}
+        #
+        # Причина: target — это ГРУППА, а date — полночь дня. У группы в
+        # один день может быть несколько занятий, и по этим двум полям
+        # сервер не может понять, какое из них отмечают.
+        #
+        # Что именно различает занятия, видно по сущности reservation из
+        # снятой схемы: она связывает schedule + date + minutes (= время
+        # начала в минутах от полуночи). Поэтому сюда добавляются
+        # minutesBegin/minutesEnd и сам объект schedule.
+        #
+        # То же самое уже делает burn_visit через targetValues — то есть
+        # для списания эта привязка была нужна с самого начала, а для
+        # отметки её просто забыли передать.
+        if target_values:
+            payload["targetValues"] = target_values
+            minutes = target_values.get("minutesBegin")
+            if minutes is not None:
+                # Дублируется на верхнем уровне: в reservation поле
+                # называется просто minutes.
+                payload["minutes"] = minutes
+        if schedule:
+            payload["schedule"] = schedule
+
         if force:
             payload["force"] = True
         # Тело запроса пишется ЦЕЛИКОМ, а не только тремя id.
@@ -1607,7 +1638,9 @@ class ImpulseCRMClient:
             f"→ check_visits/check: клиент {client_id}, абонемент "
             f"{account.get('id')} ({account.get('entity')}), цель "
             f"{target.get('id')} ({target.get('entity')}), дата {date_ts} "
-            f"({datetime.fromtimestamp(date_ts, tz=timezone.utc)} UTC)"
+            f"({datetime.fromtimestamp(date_ts, tz=timezone.utc)} UTC), "
+            f"расписание {(schedule or {}).get('id')}, "
+            f"minutesBegin {(target_values or {}).get('minutesBegin')}"
         )
         logger.debug(f"   тело check: {json.dumps(payload, ensure_ascii=False)[:4000]}")
 
