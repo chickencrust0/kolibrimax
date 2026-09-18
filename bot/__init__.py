@@ -1,0 +1,1 @@
+"""Chess school bot package."""
