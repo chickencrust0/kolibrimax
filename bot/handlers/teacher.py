@@ -45,6 +45,8 @@ from bot.fsm import FSMContext
 from bot.states import DateRangeStates, HomeworkStates, TeacherTransferStates
 from max_api.context import Callback, Msg
 from max_api.keyboards import (
+    btn_callback,
+    keyboard as inline_keyboard,
     contact_admin_keyboard,
     homework_targets_keyboard,
     lesson_action_keyboard,
@@ -64,6 +66,16 @@ router = Router(name="teacher")
 def _teacher(db: Database, max_user_id: int):
     user = db.get_user(max_user_id)
     return user if user and user["role"] == "teacher" else None
+
+
+def _frozen_students(db: Database, lesson) -> set:
+    lesson_id = lesson.get("id")
+    if not lesson_id:
+        return set()
+    return {
+        cid for cid in lesson.get("customer_ids") or []
+        if db.get_freeze_for_lesson(cid, lesson_id)
+    }
 
 
 def _parse_iso(text: str):
@@ -235,8 +247,10 @@ async def show_schedule(
             ]
             if students and lesson.get("id"):
                 absent_ids = set(db.get_absent_client_ids(lesson["id"])) if db else set()
+                frozen = _frozen_students(db, lesson) if db else set()
+                marked = await _marked_set(impulse, _lesson_date_ts(lesson), lesson)
                 keyboard = lesson_attendance_keyboard(
-                    lesson["id"], students, absent=absent_ids
+                    lesson["id"], students, marked=marked, absent=absent_ids, frozen=frozen
                 )
             elif lesson.get("id"):
                 # Учеников в занятии нет — отмечать некого, но ДЗ и перенос
@@ -294,6 +308,7 @@ async def _toggle_attendance(
     cache: LessonCache,
     *,
     present: bool,
+    selected_account_id: str = None,
 ) -> None:
     action = "присутствие" if present else "снятие отметки"
     logger.info(
@@ -329,6 +344,10 @@ async def _toggle_attendance(
 
     try:
         date_ts = _lesson_date_ts(lesson)
+        if db.get_freeze_for_lesson(client_id, lesson_id):
+            await _refresh_attendance_card(callback, db, impulse, lesson, lesson_id, date_ts)
+            await _reply(callback, "❄️ Занятие заморожено. Посещение не изменено.")
+            return
         # Метка даты — самое частое место расхождения часовых поясов:
         # impulseCRM хранит даты полуночью UTC, а хост живёт по UTC или
         # по поясу филиала. Если сервер «не видит» занятия и молча
@@ -346,7 +365,11 @@ async def _toggle_attendance(
         return
 
     accounts_by_client = await impulse.get_accounts_by_client()
-    account = impulse.pick_active_account(accounts_by_client.get(client_id, []))
+    accounts = accounts_by_client.get(client_id, accounts_by_client.get(str(client_id), []))
+    account = impulse.pick_active_account(accounts)
+    if selected_account_id is not None:
+        account = next((a for a in accounts if str(a.get('id')) == selected_account_id
+                        and impulse._is_account_active(a)), None)
     if not account:
         logger.warning(
             f"⚠️ У клиента {client_id} нет действующего абонемента "
@@ -409,6 +432,7 @@ async def _toggle_attendance(
                 client_id, account, target, date_ts,
                 schedule=raw or None,
                 target_values=target_values,
+                explicit_account=selected_account_id is not None,
             )
         else:
             # СНЯТИЕ отметки — это удаление записи о посещении
@@ -421,6 +445,20 @@ async def _toggle_attendance(
             removed = await impulse.uncheck_visit(client_id, target, date_ts)
     except ImpulseCRMError as e:
         logger.error(f"❌ CRM отклонила отметку посещения: {e}")
+        if present and selected_account_id is None and "несколько" in str(e).lower() and "абонемент" in str(e).lower():
+            choices = [a for a in accounts if a.get("id") is not None and impulse._is_account_active(a)]
+            rows = []
+            for a in choices:
+                title = a.get(settings.IMPULSE_FIELD_ACCOUNT_TYPE_NAME) or "Абонемент"
+                label = f"{title} №{a.get('number') or a['id']} · остаток {impulse._account_lessons_left(a)}"
+                rows.append([btn_callback(label, f"attaccount:{lesson_id}:{client_id}:{a['id']}")])
+            if rows:
+                await callback.message.answer(
+                    "У ученика несколько абонементов. Выберите, по какому отметить это занятие:",
+                    reply_markup=[inline_keyboard(rows[:30])],
+                )
+                await callback.answer()
+                return
 
         # Диагностика оставлена короткой: формат запроса выверен по
         # настоящему запросу браузера, и если отказ всё же случится,
@@ -504,9 +542,9 @@ async def _refresh_attendance_card(
     # а не роняем обработчик.
     try:
         await callback.message.edit_text(
-            callback.message.text or format_lesson(lesson, role="teacher", customers=customers),
+            format_lesson(lesson, role="teacher", customers=customers),
             reply_markup=lesson_attendance_keyboard(
-                lesson_id, students, marked, absent
+                lesson_id, students, marked, absent, frozen=_frozen_students(db, lesson)
             ),
         )
     except Exception as e:
@@ -571,6 +609,32 @@ async def unmark_attendance(
     await _toggle_attendance(callback, db, impulse, cache, present=False)
 
 
+@router.callback_query(F.data.startswith("attaccount:"))
+async def mark_with_account(callback: Callback, db: Database, impulse: ImpulseCRMClient, cache: LessonCache) -> None:
+    original = callback.data
+    payload, _, account_id = original.split(":", 1)[1].rpartition(":")
+    callback.data = f"att:{payload}"
+    try:
+        await _toggle_attendance(callback, db, impulse, cache, present=True, selected_account_id=account_id)
+    finally:
+        callback.data = original
+
+
+@router.callback_query(F.data.startswith("journal:"))
+async def journal_status(callback: Callback, db: Database, impulse: ImpulseCRMClient, cache: LessonCache) -> None:
+    if not _teacher(db, callback.from_user.id):
+        await callback.answer("Доступно только преподавателям")
+        return
+    lesson_id, _, client_id = callback.data.split(":", 1)[1].rpartition(":")
+    lesson = await get_lesson_snapshot(lesson_id, impulse, cache, db=db)
+    if not lesson:
+        await callback.answer("Занятие не найдено")
+        return
+    await _refresh_attendance_card(callback, db, impulse, lesson, lesson_id, _lesson_date_ts(lesson))
+    await callback.answer("❄️ Занятие заморожено" if db.get_freeze_for_lesson(client_id, lesson_id)
+                          else "Выберите «Был» или «Не был» справа от имени")
+
+
 # ==================== НЕЯВКА («не пришёл») ====================
 #
 # Неявка НЕ пишется в CRM сразу: в impulseCRM нет статуса «не пришёл»,
@@ -620,6 +684,13 @@ async def _toggle_absence(
         return
 
     if absent:
+        if db.get_freeze_for_lesson(client_id, lesson_id):
+            await _refresh_attendance_card(callback, db, impulse, lesson, lesson_id, _lesson_date_ts(lesson))
+            await _reply(callback, "❄️ Занятие заморожено. Неявка не ставится.")
+            return
+        if client_id in await _marked_set(impulse, _lesson_date_ts(lesson), lesson):
+            await _reply(callback, "Сначала снимите отметку «Был», затем отметьте «Не был».")
+            return
         customers = await load_customer_map(impulse)
         db.mark_absent(
             lesson_id,

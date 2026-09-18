@@ -1769,6 +1769,7 @@ class ImpulseCRMClient:
         target: Dict[str, Any],
         date_ts: int,
         force: bool = False,
+        explicit_account: bool = False,
         schedule: Optional[Dict[str, Any]] = None,
         target_values: Optional[Dict[str, Any]] = None,
     ) -> Any:
@@ -1842,6 +1843,8 @@ class ImpulseCRMClient:
         }
         if force:
             payload["force"] = True
+        if explicit_account:
+            payload["account"] = account
 
         # Тело запроса пишется ЦЕЛИКОМ, а не только тремя id.
         #

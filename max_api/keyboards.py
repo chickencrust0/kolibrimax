@@ -177,10 +177,11 @@ def lesson_attendance_keyboard(
     students: List[Any],
     marked: Optional[set] = None,
     absent: Optional[set] = None,
+    frozen: Optional[set] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Карточка занятия у преподавателя: на каждого ученика ряд из двух
-    кнопок — «пришёл» и «не пришёл» — плюс общие действия по занятию.
+    Журнал: постоянная колонка имени, справа «Был» и «Не был».
+    При заморозке вместо действий показывается статус.
 
     students — список (client_id, имя). marked — уже отмеченные
     присутствующими (пишется в CRM). absent — отмеченные неявкой
@@ -188,24 +189,24 @@ def lesson_attendance_keyboard(
     """
     marked = marked or set()
     absent = absent or set()
+    frozen = {str(cid) for cid in (frozen or set())}
+    marked = {str(cid) for cid in marked}
+    absent = {str(cid) for cid in absent}
     rows: Keyboard = []
     for client_id, name in students:
-        short = name if len(name) <= 18 else name[:17] + "…"
-        if client_id in marked:
-            rows.append([
-                btn_callback(f"✅ {short}", f"unatt:{lesson_id}:{client_id}", intent="positive"),
-                btn_callback("❌", f"abs:{lesson_id}:{client_id}"),
-            ])
-        elif client_id in absent:
-            rows.append([
-                btn_callback("✅", f"att:{lesson_id}:{client_id}"),
-                btn_callback(f"❌ {short}", f"unabs:{lesson_id}:{client_id}", intent="negative"),
-            ])
-        else:
-            rows.append([
-                btn_callback(f"✅ {short}", f"att:{lesson_id}:{client_id}"),
-                btn_callback("❌", f"abs:{lesson_id}:{client_id}"),
-            ])
+        identity = btn_callback(name, f"journal:{lesson_id}:{client_id}")
+        if str(client_id) in frozen:
+            rows.append([identity, btn_callback("❄️ Заморожено", f"journal:{lesson_id}:{client_id}")])
+            continue
+        present = str(client_id) in marked
+        missing = str(client_id) in absent
+        rows.append([
+            identity,
+            btn_callback("✅ Был" if present else "☐ Был", f"{'unatt' if present else 'att'}:{lesson_id}:{client_id}",
+                         intent="positive" if present else None),
+            btn_callback("❌ Не был" if missing else "☐ Не был", f"{'unabs' if missing else 'abs'}:{lesson_id}:{client_id}",
+                         intent="negative" if missing else None),
+        ])
 
     rows.append([btn_callback("📝 Прикрепить ДЗ", f"hw:{lesson_id}")])
     rows.append([btn_callback("🔁 Заявка на перенос", f"transfer:{lesson_id}")])
