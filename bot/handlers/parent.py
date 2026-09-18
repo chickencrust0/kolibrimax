@@ -814,6 +814,8 @@ async def certificate_upload(
     await message.answer("✅ Справка прикреплена. Спасибо!")
 
     for manager_id in manager_ids(db):
+        if not db.notification_enabled(manager_id, "updates"):
+            continue
         await safe_call(lambda mid=manager_id: message.bot.send_message(
             user_id=mid,
             text=(

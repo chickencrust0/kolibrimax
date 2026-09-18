@@ -33,6 +33,7 @@ from max_api.context import Callback, Msg
 from max_api.keyboards import (
     confirm_logout_keyboard,
     manager_menu_keyboard,
+    notification_settings_keyboard,
     parent_menu_keyboard,
     request_phone_keyboard,
     teacher_menu_keyboard,
@@ -209,6 +210,46 @@ async def back_to_start(callback: Callback, db: Database, state: FSMContext) -> 
     else:
         await ask_phone(callback.message, state)
     await callback.answer()
+
+
+@router.callback_query(F.data == "menu:notifications")
+async def notification_settings(callback: Callback, db: Database) -> None:
+    user = db.get_user(callback.from_user.id)
+    if not user:
+        await callback.answer("Сначала войдите в профиль через /start.")
+        return
+    await callback.message.answer(
+        "🔔 <b>Настройки уведомлений</b>\n\nНажмите на категорию, чтобы включить или выключить её. "
+        "Сообщения текущего диалога и переписка с администратором всегда доступны.",
+        parse_mode="HTML",
+        reply_markup=notification_settings_keyboard(
+            db.get_notification_preferences(callback.from_user.id), user["role"]
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("notifications:"))
+async def notification_toggle(callback: Callback, db: Database) -> None:
+    user = db.get_user(callback.from_user.id)
+    if not user:
+        await callback.answer("Сначала войдите в профиль через /start.")
+        return
+    category = callback.data.partition(":")[2]
+    allowed = ("summaries", "updates", "broadcasts") if user["role"] == "manager" else (
+        "lessons", "updates", "broadcasts"
+    )
+    if category not in allowed:
+        await callback.answer("Неизвестная настройка.")
+        return
+    preferences = db.toggle_notification(callback.from_user.id, category)
+    await callback.message.edit_text(
+        "🔔 <b>Настройки уведомлений</b>\n\nНажмите на категорию, чтобы включить или выключить её. "
+        "Сообщения текущего диалога и переписка с администратором всегда доступны.",
+        parse_mode="HTML",
+        reply_markup=notification_settings_keyboard(preferences, user["role"]),
+    )
+    await callback.answer("Настройки сохранены")
 
 
 @router.callback_query(F.data.startswith("auth:"))

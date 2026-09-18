@@ -964,6 +964,8 @@ async def transfer_finish(message: Msg, state: FSMContext, db: Database) -> None
     sent_at = settings.now().strftime("%d.%m.%Y %H:%M")
 
     for manager_id in manager_ids(db):
+        if not db.notification_enabled(manager_id, "updates"):
+            continue
         try:
             await safe_call(lambda mid=manager_id: message.bot.send_message(
                 user_id=mid,
@@ -1297,6 +1299,8 @@ async def _notify_parent_frozen(callback, db: Database, client_id: int, lesson, 
     """
     parent = db.get_user_by_crm_id(client_id, "parent")
     if not parent:
+        return
+    if not db.notification_enabled(parent["max_user_id"], "updates"):
         return
     day = parse_lesson_date(lesson)
     when = day.strftime("%d.%m") if day else ""

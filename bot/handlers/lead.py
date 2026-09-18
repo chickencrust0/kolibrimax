@@ -371,11 +371,11 @@ async def _notify_managers(
     message: Msg, db: Database, lead_id: int, phone: str, ages: str,
     direction: str, user_name: str,
 ) -> None:
-    recipients = manager_ids(db)
+    recipients = [uid for uid in manager_ids(db) if db.notification_enabled(uid, "updates")]
     if not recipients:
         logger.warning(
-            f"⚠️ Заявка №{lead_id} создана, но менеджеров нет — уведомлять некого. "
-            f"Пусть менеджер войдёт командой /manager или впишите id в ADMIN_MAX_IDS."
+            f"⚠️ Заявка №{lead_id} создана, но менеджеров с включёнными "
+            "уведомлениями о заявках нет. Заявка доступна в меню менеджера."
         )
         return
 

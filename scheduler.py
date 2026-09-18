@@ -104,6 +104,8 @@ class ReminderScheduler:
 
         for role in ("teacher", "parent"):
             for user in self.db.get_all_users_by_role(role):
+                if not self.db.notification_enabled(user["max_user_id"], "lessons"):
+                    continue
                 try:
                     kwargs = (
                         {"teacher_id": user["crm_id"]} if role == "teacher"
@@ -179,6 +181,8 @@ class ReminderScheduler:
             teacher = self.db.get_user_by_crm_id(teacher_id, "teacher")
             if not teacher:
                 continue
+            if not self.db.notification_enabled(teacher["max_user_id"], "lessons"):
+                continue
             if self.db.was_reminder_sent(lesson_id, reminder_type, teacher["max_user_id"], hours=6):
                 continue
             try:
@@ -196,6 +200,8 @@ class ReminderScheduler:
             parent = self.db.get_user_by_crm_id(customer_id, "parent")
             if not parent:
                 continue
+            if not self.db.notification_enabled(parent["max_user_id"], "lessons"):
+                continue
             if self.db.was_reminder_sent(lesson_id, reminder_type, parent["max_user_id"], hours=6):
                 continue
             try:
@@ -211,6 +217,12 @@ class ReminderScheduler:
     # ==================== ЕЖЕДНЕВНАЯ СВОДКА ====================
 
     async def send_daily_summary(self):
+        recipients = [
+            uid for uid in manager_ids(self.db)
+            if self.db.notification_enabled(uid, "summaries")
+        ]
+        if not recipients:
+            return
         yesterday = settings.today() - timedelta(days=1)
         yesterday_iso = yesterday.isoformat()
         period_label = f"за {fmt_date_long(yesterday)}"
@@ -230,7 +242,7 @@ class ReminderScheduler:
             logger.error(f"❌ Ошибка формирования сводки: {e}", exc_info=True)
             return
 
-        for manager_id in manager_ids(self.db):
+        for manager_id in recipients:
             try:
                 await send_blocks(self.bot, manager_id, blocks)
             except Exception as e:
@@ -261,12 +273,12 @@ class ReminderScheduler:
         """
         today = settings.today()
         today_iso = today.isoformat()
-        recipients = manager_ids(self.db)
+        recipients = [
+            uid for uid in manager_ids(self.db)
+            if self.db.notification_enabled(uid, "summaries")
+        ]
         if not recipients:
-            logger.warning(
-                "⚠️ Сводка по неявкам не отправлена: менеджеров нет. "
-                "Пусть менеджер войдёт командой /manager."
-            )
+            logger.info("Сводка по неявкам не отправлена: нет подписанных менеджеров")
             return
 
         absences = self.db.get_absences_for_date(today_iso, status="pending")
@@ -405,6 +417,8 @@ class ReminderScheduler:
             parent = self.db.get_user_by_crm_id(client_id, "parent")
             if not parent:
                 continue  # родителя нет в боте — уведомлять некого
+            if not self.db.notification_enabled(parent["max_user_id"], "updates"):
+                continue
 
             reminder_type = f"burned:{client_id}"
             if self.db.was_reminder_sent(

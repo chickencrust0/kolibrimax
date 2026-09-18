@@ -57,6 +57,14 @@ class Database:
                     is_active BOOLEAN DEFAULT 1
                 );
 
+                CREATE TABLE IF NOT EXISTS notification_preferences (
+                    max_user_id INTEGER PRIMARY KEY,
+                    lessons INTEGER NOT NULL DEFAULT 1,
+                    summaries INTEGER NOT NULL DEFAULT 1,
+                    updates INTEGER NOT NULL DEFAULT 1,
+                    broadcasts INTEGER NOT NULL DEFAULT 1
+                );
+
                 CREATE TABLE IF NOT EXISTS homework_files (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     lesson_id TEXT NOT NULL,
@@ -272,6 +280,35 @@ class Database:
                 logger.info(f"🛠 Перенесено общих ДЗ в lesson_homework: {moved}")
 
     # ==================== ПОЛЬЗОВАТЕЛИ ====================
+
+    NOTIFICATION_CATEGORIES = ("lessons", "summaries", "updates", "broadcasts")
+
+    def get_notification_preferences(self, max_user_id: int) -> Dict[str, bool]:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT lessons, summaries, updates, broadcasts "
+                "FROM notification_preferences WHERE max_user_id = ?", (max_user_id,)
+            ).fetchone()
+        return {key: bool(row[key]) if row else True for key in self.NOTIFICATION_CATEGORIES}
+
+    def notification_enabled(self, max_user_id: int, category: str) -> bool:
+        if category not in self.NOTIFICATION_CATEGORIES:
+            raise ValueError(f"Unknown notification category: {category}")
+        return self.get_notification_preferences(max_user_id)[category]
+
+    def toggle_notification(self, max_user_id: int, category: str) -> Dict[str, bool]:
+        if category not in self.NOTIFICATION_CATEGORIES:
+            raise ValueError(f"Unknown notification category: {category}")
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO notification_preferences (max_user_id) VALUES (?)",
+                (max_user_id,),
+            )
+            conn.execute(
+                f"UPDATE notification_preferences SET {category} = 1 - {category} "
+                "WHERE max_user_id = ?", (max_user_id,),
+            )
+        return self.get_notification_preferences(max_user_id)
 
     def deactivate_user(self, max_user_id: int):
         with self._conn() as conn:

@@ -98,6 +98,7 @@ def teacher_menu_keyboard() -> List[Dict[str, Any]]:
         [btn_callback("❄️ Заморозить занятие", "menu:teacher:freeze")],
         [btn_callback("📊 Отчёт по урокам", "menu:teacher:report")],
         [btn_callback("👤 Связаться с администратором", "menu:support")],
+        [btn_callback("🔔 Настройки уведомлений", "menu:notifications")],
         [btn_callback("🚪 Выйти из профиля", "menu:logout")],
     ])]
 
@@ -116,6 +117,7 @@ def parent_menu_keyboard() -> List[Dict[str, Any]]:
         [btn_callback("❄️ Заморозить занятие", "menu:parent:freeze")],
         [btn_callback("📋 Мои заморозки", "menu:parent:freezes")],
         [btn_callback("👤 Связаться с администратором", "menu:support")],
+        [btn_callback("🔔 Настройки уведомлений", "menu:notifications")],
         [btn_callback("🚪 Выйти из профиля", "menu:logout")],
     ])]
 
@@ -131,8 +133,27 @@ def manager_menu_keyboard() -> List[Dict[str, Any]]:
         [btn_callback("👤 Обращения", "menu:manager:support")],
         [btn_callback("👀 Активность в боте", "menu:manager:activity")],
         [btn_callback("🔐 Кто вошёл в бота", "menu:manager:logins")],
+        [btn_callback("🔔 Настройки уведомлений", "menu:notifications")],
         [btn_callback("🚪 Выйти из профиля", "menu:logout")],
     ])]
+
+
+def notification_settings_keyboard(preferences: Dict[str, bool], role: str) -> List[Dict[str, Any]]:
+    labels = {
+        "lessons": "Расписание и напоминания об уроках",
+        "summaries": "Ежедневные сводки",
+        "updates": "Заявки и события занятий",
+        "broadcasts": "Массовые рассылки",
+    }
+    categories = ("summaries", "updates", "broadcasts") if role == "manager" else (
+        "lessons", "updates", "broadcasts"
+    )
+    rows = [
+        [btn_callback(f"{'✅' if preferences[key] else '🔕'} {labels[key]}", f"notifications:{key}")]
+        for key in categories
+    ]
+    rows.append([btn_callback("⬅️ В меню", "menu:start")])
+    return [keyboard(rows)]
 
 
 def lesson_action_keyboard(lesson_id: Any) -> List[Dict[str, Any]]:

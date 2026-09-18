@@ -168,14 +168,15 @@ async def broadcast_execute(callback: Callback, state: FSMContext, db: Database)
     unique = []
     for user in recipients:
         uid = user.get("max_user_id")
-        if uid and uid not in seen:
+        if uid and uid not in seen and db.notification_enabled(uid, "broadcasts"):
             seen.add(uid)
             unique.append(user)
     recipients = unique
 
     if not recipients:
         await callback.message.edit_text(
-            f"📭 В этой базе никого нет — рассылать {labels.get(action, '')} некому."
+            f"📭 Нет получателей с включёнными массовыми рассылками "
+            f"({labels.get(action, '')})."
         )
         await callback.answer()
         return
@@ -373,9 +374,10 @@ async def _resolve_transfer(
         return
 
     try:
-        await callback.bot.send_message(
-            user_id=request["teacher_max_id"], text=f"{label} Заявка №{request_id}."
-        )
+        if db.notification_enabled(request["teacher_max_id"], "updates"):
+            await callback.bot.send_message(
+                user_id=request["teacher_max_id"], text=f"{label} Заявка №{request_id}."
+            )
     except Exception as e:
         logger.warning(f"Не удалось уведомить автора заявки {request_id}: {e}")
 
@@ -615,6 +617,8 @@ async def _notify_parent_burned(callback: Callback, db: Database, absence) -> No
         db.get_user_by_crm_id(client_id, "parent") if client_id is not None else None
     )
     if not parent or not lesson_id:
+        return
+    if not db.notification_enabled(parent["max_user_id"], "updates"):
         return
 
     reminder_type = f"burned:{client_id}"
