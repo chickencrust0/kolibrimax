@@ -70,6 +70,11 @@ class SupportStates:
     chatting = "support:chatting"
 
 
+class DirectChatStates:
+    """Пользователь пишет второму участнику открытого прямого диалога."""
+    chatting = "direct_chat:chatting"
+
+
 class ManagerReplyStates:
     waiting_for_reply = "manager_support:waiting_for_reply"
 

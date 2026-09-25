@@ -97,7 +97,7 @@ def teacher_menu_keyboard() -> List[Dict[str, Any]]:
         # пункта педагогу приходилось пересылать просьбу менеджеру.
         [btn_callback("❄️ Заморозить занятие", "menu:teacher:freeze")],
         [btn_callback("📊 Отчёт по урокам", "menu:teacher:report")],
-        [btn_callback("👤 Связаться с администратором", "menu:support")],
+        [btn_callback("💬 Связаться с родителями", "menu:support")],
         [btn_callback("🔔 Настройки уведомлений", "menu:notifications")],
         [btn_callback("🚪 Выйти из профиля", "menu:logout")],
     ])]
@@ -116,7 +116,7 @@ def parent_menu_keyboard() -> List[Dict[str, Any]]:
         # было неочевидно, что заморозка живёт именно там.
         [btn_callback("❄️ Заморозить занятие", "menu:parent:freeze")],
         [btn_callback("📋 Мои заморозки", "menu:parent:freezes")],
-        [btn_callback("👤 Связаться с администратором", "menu:support")],
+        [btn_callback("💬 Связаться с преподавателем", "menu:support")],
         [btn_callback("🔔 Настройки уведомлений", "menu:notifications")],
         [btn_callback("🚪 Выйти из профиля", "menu:logout")],
     ])]
@@ -263,7 +263,7 @@ def certificate_upload_keyboard(freeze_id: Any) -> List[Dict[str, Any]]:
 
 def contact_admin_keyboard() -> List[Dict[str, Any]]:
     """Та же кнопка связи, что и в стартовом меню."""
-    return [keyboard([[btn_callback("👤 Связаться с администратором", "menu:support")]])]
+    return [keyboard([[btn_callback("👤 Связаться с администратором", "menu:support:admin")]])]
 
 
 def support_user_keyboard(ticket_id: Any) -> List[Dict[str, Any]]:
@@ -274,6 +274,29 @@ def support_manager_keyboard(ticket_id: Any) -> List[Dict[str, Any]]:
     return [keyboard([
         [btn_callback("✍️ Ответить", f"sup_reply:{ticket_id}")],
         [btn_callback("🔒 Закрыть обращение", f"sup_close:{ticket_id}")],
+    ])]
+
+
+def direct_people_keyboard(people: List[Any], target_role: str) -> List[Dict[str, Any]]:
+    """Выбор доступного собеседника из общей CRM-группы."""
+    rows = [
+        [btn_callback(f"💬 {str(name or 'Без имени')[:42]}", f"dchat_to:{user_id}")]
+        for user_id, name in people
+    ]
+    rows.append([btn_callback("👤 Администратору", "menu:support:admin")])
+    rows.append([btn_callback("⬅️ В меню", "menu:start")])
+    if not rows:
+        rows = [
+            [btn_callback("👤 Администратору", "menu:support:admin")],
+            [btn_callback("⬅️ В меню", "menu:start")],
+        ]
+    return [keyboard(rows)]
+
+
+def direct_chat_keyboard(thread_id: Any) -> List[Dict[str, Any]]:
+    return [keyboard([
+        [btn_callback("✍️ Ответить", f"dchat_reply:{thread_id}")],
+        [btn_callback("🔒 Завершить диалог", f"dchat_close:{thread_id}")],
     ])]
 
 

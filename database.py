@@ -202,6 +202,35 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_ticket_messages
                     ON support_messages(ticket_id, created_at);
 
+                -- Прямые диалоги родителя с преподавателем. Участники
+                -- хранятся явно, чтобы проверять доступ к каждому сообщению.
+                CREATE TABLE IF NOT EXISTS direct_threads (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_a_max_id INTEGER NOT NULL,
+                    user_b_max_id INTEGER NOT NULL,
+                    user_a_role TEXT NOT NULL,
+                    user_b_role TEXT NOT NULL,
+                    status TEXT DEFAULT 'open' CHECK(status IN ('open', 'closed')),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    closed_at TIMESTAMP,
+                    closed_by INTEGER,
+                    UNIQUE(user_a_max_id, user_b_max_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS direct_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    thread_id INTEGER NOT NULL,
+                    sender_max_id INTEGER NOT NULL,
+                    text TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (thread_id) REFERENCES direct_threads(id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_direct_threads_users
+                    ON direct_threads(user_a_max_id, user_b_max_id, status);
+                CREATE INDEX IF NOT EXISTS idx_direct_messages_thread
+                    ON direct_messages(thread_id, created_at);
+
                 -- Заморозки занятий. В impulseCRM отдельной сущности для
                 -- этого нет: списание идёт через burn_one, а счётчик
                 -- беспричинных заморозок хранится в поле email клиента
@@ -864,6 +893,104 @@ class Database:
             return cursor.rowcount > 0
 
     # ==================== ПОДДЕРЖКА ====================
+
+    # ==================== ПРЯМЫЕ ДИАЛОГИ ====================
+
+    def get_direct_thread(self, thread_id: int) -> Optional[Dict[str, Any]]:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM direct_threads WHERE id=?", (thread_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_direct_thread_for_users(self, first_id: int, second_id: int) -> Optional[Dict[str, Any]]:
+        with self._conn() as conn:
+            row = conn.execute(
+                """SELECT * FROM direct_threads
+                   WHERE ((user_a_max_id=? AND user_b_max_id=?)
+                       OR (user_a_max_id=? AND user_b_max_id=?))
+                     AND status='open'
+                   ORDER BY id DESC LIMIT 1""",
+                (first_id, second_id, second_id, first_id),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def create_direct_thread(
+        self, first_id: int, first_role: str, second_id: int, second_role: str
+    ) -> int:
+        existing = self.get_direct_thread_for_users(first_id, second_id)
+        if existing:
+            return int(existing["id"])
+        a, b = sorted(
+            [(int(first_id), first_role), (int(second_id), second_role)],
+            key=lambda item: item[0],
+        )
+        with self._conn() as conn:
+            closed = conn.execute(
+                """SELECT id FROM direct_threads
+                   WHERE ((user_a_max_id=? AND user_b_max_id=?)
+                       OR (user_a_max_id=? AND user_b_max_id=?))
+                   ORDER BY id DESC LIMIT 1""",
+                (a[0], b[0], b[0], a[0]),
+            ).fetchone()
+            if closed:
+                conn.execute(
+                    """UPDATE direct_threads
+                       SET status='open', closed_at=NULL, closed_by=NULL
+                       WHERE id=?""",
+                    (closed["id"],),
+                )
+                return int(closed["id"])
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO direct_threads
+                   (user_a_max_id, user_b_max_id, user_a_role, user_b_role)
+                   VALUES (?,?,?,?)""",
+                (a[0], b[0], a[1], b[1]),
+            )
+            if cur.lastrowid:
+                return int(cur.lastrowid)
+        thread = self.get_direct_thread_for_users(first_id, second_id)
+        if not thread:
+            raise RuntimeError("Не удалось создать прямой диалог")
+        return int(thread["id"])
+
+    def direct_thread_has_user(self, thread: Dict[str, Any], user_id: int) -> bool:
+        return int(user_id) in (
+            int(thread["user_a_max_id"]), int(thread["user_b_max_id"])
+        )
+
+    def direct_thread_peer(self, thread: Dict[str, Any], user_id: int) -> Optional[int]:
+        if int(thread["user_a_max_id"]) == int(user_id):
+            return int(thread["user_b_max_id"])
+        if int(thread["user_b_max_id"]) == int(user_id):
+            return int(thread["user_a_max_id"])
+        return None
+
+    def add_direct_message(self, thread_id: int, sender_id: int, text: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO direct_messages (thread_id, sender_max_id, text) VALUES (?,?,?)",
+                (thread_id, sender_id, text),
+            )
+
+    def get_direct_messages(self, thread_id: int, limit: int = 20) -> List[Dict[str, Any]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT * FROM direct_messages WHERE thread_id=?
+                   ORDER BY created_at DESC, id DESC LIMIT ?""",
+                (thread_id, limit),
+            ).fetchall()
+            return [dict(row) for row in reversed(rows)]
+
+    def close_direct_thread(self, thread_id: int, closed_by: int) -> bool:
+        with self._conn() as conn:
+            cur = conn.execute(
+                """UPDATE direct_threads
+                   SET status='closed', closed_at=CURRENT_TIMESTAMP, closed_by=?
+                   WHERE id=? AND status='open'""",
+                (closed_by, thread_id),
+            )
+            return cur.rowcount > 0
 
     def get_open_ticket_for_user(self, user_max_id: int) -> Optional[Dict[str, Any]]:
         with self._conn() as conn:
