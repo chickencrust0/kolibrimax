@@ -277,12 +277,35 @@ def support_manager_keyboard(ticket_id: Any) -> List[Dict[str, Any]]:
     ])]
 
 
+def direct_children_keyboard(children: List[Any], page: int = 0) -> List[Dict[str, Any]]:
+    """Список детей, включая тех, чьи родители ещё не вошли в бота."""
+    page_size = 20
+    last_page = max(0, (len(children) - 1) // page_size)
+    page = max(0, min(page, last_page))
+    rows = [
+        [btn_callback(f"👦 {str(name)[:42]}", f"dchat_child:{child_id}")]
+        for child_id, name in children[page * page_size:(page + 1) * page_size]
+    ]
+    navigation = []
+    if page > 0:
+        navigation.append(btn_callback("⬅️ Назад", f"dchat_children:{page - 1}"))
+    if page < last_page:
+        navigation.append(btn_callback("Далее ➡️", f"dchat_children:{page + 1}"))
+    if navigation:
+        rows.append(navigation)
+    rows.append([btn_callback("👤 Администратору", "menu:support:admin")])
+    rows.append([btn_callback("⬅️ В меню", "menu:start")])
+    return [keyboard(rows)]
+
+
 def direct_people_keyboard(people: List[Any], target_role: str) -> List[Dict[str, Any]]:
     """Выбор доступного собеседника из общей CRM-группы."""
     rows = [
         [btn_callback(f"💬 {str(name or 'Без имени')[:42]}", f"dchat_to:{user_id}")]
         for user_id, name in people
     ]
+    if target_role == "parent":
+        rows.append([btn_callback("⬅️ К списку детей", "dchat_children:0")])
     rows.append([btn_callback("👤 Администратору", "menu:support:admin")])
     rows.append([btn_callback("⬅️ В меню", "menu:start")])
     if not rows:

@@ -23,6 +23,7 @@ from database import Database
 from bot.formatting import esc, safe_call
 from bot.handlers.common import (
     fetch_lessons,
+    load_customer_map,
     is_manager,
     manager_ids,
 )
@@ -37,6 +38,7 @@ from max_api.keyboards import (
     support_user_keyboard,
     direct_chat_keyboard,
     direct_people_keyboard,
+    direct_children_keyboard,
     teacher_menu_keyboard,
 )
 
@@ -62,6 +64,7 @@ async def support_start(
         return
 
     if user.get("role") in ("parent", "teacher"):
+        await state.clear()
         await _show_direct_people(callback, db, user, impulse, cache)
         await callback.answer()
         return
@@ -89,7 +92,7 @@ async def _start_manager_support(callback: Callback, db: Database, state: FSMCon
 
 
 async def _show_direct_people(
-    callback: Callback, db: Database, user: dict, impulse=None, cache=None
+    callback: Callback, db: Database, user: dict, impulse=None, cache=None, page=0
 ) -> None:
     """Show only teachers/parents sharing at least one CRM lesson."""
     if impulse is None:
@@ -113,10 +116,17 @@ async def _show_direct_people(
             date_from=start, date_to=end,
         )
         ids = {str(cid) for lesson in lessons for cid in lesson.get("customer_ids") or []}
-        people = []
-        for parent in await _users_by_crm_ids(db, ids, "parent"):
-            people.append((parent["max_user_id"], parent.get("full_name") or "Родитель"))
-        target_role = "parent"
+        names = {str(cid): name for cid, name in (await load_customer_map(impulse)).items()}
+        children = sorted(
+            [(cid, names.get(cid) or f"Ученик №{cid}") for cid in ids],
+            key=lambda item: (item[1].casefold(), item[0]),
+        )
+        await callback.message.answer(
+            "💬 Выберите ребёнка, чтобы написать его родителю:"
+            if children else "По вашим занятиям не найдены дети. Обратитесь к администратору.",
+            reply_markup=direct_children_keyboard(children, page),
+        )
+        return
     if not people:
         await callback.message.answer(
             "Пока нет доступных собеседников по общим занятиям. "
@@ -131,12 +141,58 @@ async def _show_direct_people(
 
 
 async def _users_by_crm_ids(db: Database, ids, role: str):
-    result = []
-    for crm_id in ids:
-        user = db.get_user_by_crm_id(crm_id, role)
-        if user and user.get("is_active", 1):
-            result.append(user)
-    return result
+    ids = {str(crm_id) for crm_id in ids}
+    return [user for user in db.get_all_users_by_role(role) if str(user["crm_id"]) in ids]
+
+
+@router.callback_query(F.data.startswith("dchat_children:"))
+async def direct_children_page(callback: Callback, db: Database, state: FSMContext, impulse, cache) -> None:
+    user = db.get_user(callback.from_user.id)
+    if not user or user.get("role") != "teacher":
+        await callback.answer("❌ Только для преподавателей.")
+        return
+    try:
+        page = int(callback.data.split(":", 1)[1])
+    except ValueError:
+        await callback.answer("❌ Неверная страница.")
+        return
+    await state.clear()
+    await _show_direct_people(callback, db, user, impulse, cache, page=page)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("dchat_child:"))
+async def direct_child_parents(callback: Callback, db: Database, state: FSMContext, impulse, cache) -> None:
+    user = db.get_user(callback.from_user.id)
+    if not user or user.get("role") != "teacher":
+        await callback.answer("❌ Только для преподавателей.")
+        return
+    child_id = callback.data.split(":", 1)[1]
+    lessons = await fetch_lessons(
+        impulse, cache, db=db, teacher_id=user["crm_id"],
+        date_from=(settings.today() - timedelta(days=365)).isoformat(),
+        date_to=(settings.today() + timedelta(days=365)).isoformat(),
+    )
+    ids = {str(cid) for lesson in lessons for cid in lesson.get("customer_ids") or []}
+    if child_id not in ids:
+        await callback.answer("❌ Этот ребёнок не связан с вашими занятиями.")
+        return
+    await state.clear()
+    names = {str(cid): name for cid, name in (await load_customer_map(impulse)).items()}
+    name = names.get(child_id) or f"Ученик №{child_id}"
+    parents = await _users_by_crm_ids(db, {child_id}, "parent")
+    people = [(p["max_user_id"], f"Родитель: {p.get('full_name') or name}") for p in parents]
+    await callback.message.answer(
+        f"👦 <b>{esc(name)}</b>\n\n" + (
+            "Выберите родителя для переписки:" if people else
+            "Родитель ещё не вошёл в бота или вышел из профиля. "
+            "Чтобы получать сообщения, ему нужно войти по номеру телефона, указанному в CRM. "
+            "Можно обратиться к администратору."
+        ),
+        parse_mode="HTML",
+        reply_markup=direct_people_keyboard(people, "parent"),
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "menu:support:admin")
@@ -228,13 +284,17 @@ async def direct_chat_message(message: Msg, db: Database, state: FSMContext) -> 
         await message.answer("⚠️ Собеседник больше не доступен.")
         return
     db.add_direct_message(thread_id, message.from_user.id, text)
-    await safe_call(lambda: message.bot.send_message(
+    result = await safe_call(lambda: message.bot.send_message(
         user_id=peer_id,
         text=f"💬 <b>Сообщение от {esc(message.from_user.full_name)}</b>\n\n{esc(text)}",
         fmt="html",
         attachments=direct_chat_keyboard(thread_id),
     ))
-    await message.answer("✅ Сообщение доставлено.", reply_markup=direct_chat_keyboard(thread_id))
+    await message.answer(
+        "✅ Сообщение доставлено." if result is not None else
+        "⚠️ Сообщение сохранено, но доставить его не удалось. Попробуйте отправить ещё раз.",
+        reply_markup=direct_chat_keyboard(thread_id),
+    )
 
 
 @router.callback_query(F.data.startswith("dchat_close:"))
