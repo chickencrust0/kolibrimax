@@ -52,6 +52,17 @@ class DirectChatTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await self.state.get_state())
         self.assertEqual(self.fetch.call_args.kwargs["teacher_id"], 100)
 
+    async def test_parent_sees_all_teachers_in_lessons(self):
+        self.callback.from_user.id = 20
+        self.db.link_user(20, 200, "parent", "", "Родитель")
+        self.fetch.return_value = [
+            {"customer_ids": [200], "teacher_ids": [100, 101]},
+        ]
+        with patch.object(support, "load_teacher_map", AsyncMock(return_value={100: "Педагог 1", 101: "Педагог 2"})):
+            await support.support_start(self.callback, self.db, self.state, object(), None)
+        buttons = self.buttons()
+        self.assertEqual([b["text"] for b in buttons if b["payload"].startswith("dchat_")], ["💬 Педагог 1", "⏳ Педагог 2 (не подключён)"])
+
     async def test_child_lists_both_parents_and_opens_chat(self):
         self.callback.data = "dchat_child:200"
         await support.direct_child_parents(self.callback, self.db, self.state, object(), None)

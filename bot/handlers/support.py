@@ -24,6 +24,7 @@ from bot.formatting import esc, safe_call
 from bot.handlers.common import (
     fetch_lessons,
     load_customer_map,
+    load_teacher_map,
     is_manager,
     manager_ids,
 )
@@ -106,9 +107,19 @@ async def _show_direct_people(
             date_from=start, date_to=end,
         )
         ids = {str(tid) for lesson in lessons for tid in lesson.get("teacher_ids") or []}
+        teachers = {str(t["crm_id"]): t for t in await _users_by_crm_ids(db, ids, "teacher")}
+        names = {str(tid): name for tid, name in (await load_teacher_map(impulse)).items()}
+        # Показываем всех преподавателей из занятий. Раньше здесь проходили
+        # только те, кто уже вошёл в MAX, поэтому у родителя часто был один
+        # пункт вместо полного списка. У незарегистрированного преподавателя
+        # будет понятное сообщение при нажатии.
         people = []
-        for teacher in await _users_by_crm_ids(db, ids, "teacher"):
-            people.append((teacher["max_user_id"], teacher.get("full_name") or "Преподаватель"))
+        for teacher_id in sorted(ids, key=lambda tid: (names.get(tid) or "").casefold()):
+            teacher = teachers.get(teacher_id)
+            people.append((
+                teacher["max_user_id"] if teacher else None,
+                teacher.get("full_name") if teacher else names.get(teacher_id, f"Преподаватель №{teacher_id}"),
+            ))
         target_role = "teacher"
     else:
         lessons = await fetch_lessons(
@@ -159,6 +170,11 @@ async def direct_children_page(callback: Callback, db: Database, state: FSMConte
     await state.clear()
     await _show_direct_people(callback, db, user, impulse, cache, page=page)
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("dchat_unavailable:"))
+async def direct_chat_unavailable(callback: Callback) -> None:
+    await callback.answer("Этот преподаватель ещё не вошёл в бот. Обратитесь к администратору.")
 
 
 @router.callback_query(F.data.startswith("dchat_child:"))

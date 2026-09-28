@@ -301,7 +301,11 @@ def direct_children_keyboard(children: List[Any], page: int = 0) -> List[Dict[st
 def direct_people_keyboard(people: List[Any], target_role: str) -> List[Dict[str, Any]]:
     """Выбор доступного собеседника из общей CRM-группы."""
     rows = [
-        [btn_callback(f"💬 {str(name or 'Без имени')[:42]}", f"dchat_to:{user_id}")]
+        [btn_callback(
+            f"💬 {str(name or 'Без имени')[:42]}" if user_id is not None
+            else f"⏳ {str(name or 'Без имени')[:42]} (не подключён)",
+            f"dchat_to:{user_id}" if user_id is not None else f"dchat_unavailable:{name}",
+        )]
         for user_id, name in people
     ]
     if target_role == "parent":
