@@ -90,7 +90,7 @@ async def broadcast_content_text(message: Msg, state: FSMContext) -> None:
 @router.message(BroadcastStates.waiting_for_content, F.photo)
 async def broadcast_content_photo(message: Msg, state: FSMContext) -> None:
     await state.update_data(
-        broadcast_text="",
+        broadcast_text=message.text or "",
         broadcast_photo=message.photo.token,
     )
     await _ask_recipients(message, state)
@@ -198,10 +198,11 @@ async def broadcast_execute(callback: Callback, state: FSMContext, db: Database)
                     user_id=u["max_user_id"],
                     text=text,
                     attachments=[{"type": "image", "payload": {"token": photo_token}}],
+                    fmt="html",
                 ))
             else:
                 await safe_call(lambda u=user: callback.bot.send_message(
-                    user_id=u["max_user_id"], text=text
+                    user_id=u["max_user_id"], text=text, fmt="html"
                 ))
             success += 1
         except Exception as e:
