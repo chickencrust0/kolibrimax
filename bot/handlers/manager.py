@@ -81,17 +81,22 @@ async def broadcast_start(callback: Callback, state: FSMContext, db: Database) -
     await callback.answer()
 
 
-@router.message(BroadcastStates.waiting_for_content, F.text)
-async def broadcast_content_text(message: Msg, state: FSMContext) -> None:
-    await state.update_data(broadcast_text=message.text, broadcast_photo=None)
-    await _ask_recipients(message, state)
-
-
 @router.message(BroadcastStates.waiting_for_content, F.photo)
 async def broadcast_content_photo(message: Msg, state: FSMContext) -> None:
     await state.update_data(
         broadcast_text=message.text or "",
         broadcast_photo=message.photo.token,
+        broadcast_photo_url=message.photo.url,
+    )
+    await _ask_recipients(message, state)
+
+
+@router.message(BroadcastStates.waiting_for_content, F.text)
+async def broadcast_content_text(message: Msg, state: FSMContext) -> None:
+    await state.update_data(
+        broadcast_text=message.text,
+        broadcast_photo=None,
+        broadcast_photo_url=None,
     )
     await _ask_recipients(message, state)
 
@@ -127,7 +132,8 @@ async def broadcast_execute(callback: Callback, state: FSMContext, db: Database)
 
     text = data.get("broadcast_text") or ""
     photo_token = data.get("broadcast_photo")
-    if not text and not photo_token:
+    photo_url = data.get("broadcast_photo_url")
+    if not text and not photo_token and not photo_url:
         await callback.message.edit_text("❌ Нечего отправлять — начните заново.")
         await callback.answer()
         return
@@ -193,16 +199,19 @@ async def broadcast_execute(callback: Callback, state: FSMContext, db: Database)
             # (2 сообщения/сек в один диалог) и часть просто теряется.
             await asyncio.sleep(settings.MAX_BROADCAST_DELAY)
         try:
-            if photo_token:
+            if photo_token or photo_url:
+                # Повторно отправляем изображение по URL из входящего
+                # вложения, если он есть: входящий token может быть
+                # непригоден для отправки как token загруженного файла.
+                photo_payload = {"url": photo_url} if photo_url else {"token": photo_token}
                 await safe_call(lambda u=user: callback.bot.send_message(
                     user_id=u["max_user_id"],
                     text=text,
-                    attachments=[{"type": "image", "payload": {"token": photo_token}}],
-                    fmt="html",
+                    attachments=[{"type": "image", "payload": photo_payload}],
                 ))
             else:
                 await safe_call(lambda u=user: callback.bot.send_message(
-                    user_id=u["max_user_id"], text=text, fmt="html"
+                    user_id=u["max_user_id"], text=text
                 ))
             success += 1
         except Exception as e:
