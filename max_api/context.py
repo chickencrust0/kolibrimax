@@ -15,7 +15,10 @@ chat_id диалога — это снимает неоднозначность 
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from max_api.client import MaxBot
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +46,9 @@ class FileRef:
     token: str
     file_name: str
     kind: str  # "image" | "file" | "video" | "audio"
+    # MAX возвращает URL входящего изображения; его можно использовать
+    # для повторной отправки фото в рассылке.
+    url: Optional[str] = None
 
 
 def _parse_user(raw: Dict[str, Any]) -> FromUser:
@@ -57,7 +63,7 @@ def _parse_user(raw: Dict[str, Any]) -> FromUser:
 class Msg:
     """Обёртка над Update типа message_created / bot_started и т.п."""
 
-    def __init__(self, bot: "MaxBot", update: Dict[str, Any]):  # noqa: F821
+    def __init__(self, bot: "MaxBot", update: Dict[str, Any]):
         self.bot = bot
         self.raw = update
         self.update_type = update.get("update_type", "")
@@ -84,14 +90,25 @@ class Msg:
                         phone_number=phone,
                         user_id=(payload.get("max_info") or {}).get("user_id"),
                     )
-            elif a_type == "image":
-                # Предполагается, что token входящего вложения так же годится
-                # для повторной отправки через attachments=[{token: ...}],
-                # как и token, полученный от POST /uploads (см. пример
-                # ImageAttachment({token: 'existingImageToken'}) в
-                # библиотеке JS) — отдельно вендором не подтверждено.
+            # Старые обновления MAX могли обозначать изображение как
+            # `photo`; в запросах API сейчас используется `image`.
+            elif a_type in ("image", "photo"):
+                photo_tokens = payload.get("photos")
+                if not isinstance(photo_tokens, dict):
+                    photo_tokens = {}
+                token = payload.get("token") or next(
+                    (
+                        item.get("token")
+                        for item in photo_tokens.values()
+                        if isinstance(item, dict) and item.get("token")
+                    ),
+                    "",
+                )
                 self.photo = FileRef(
-                    token=payload.get("token", ""), file_name="photo.jpg", kind="image"
+                    token=token,
+                    file_name="photo.jpg",
+                    kind="image",
+                    url=payload.get("url"),
                 )
             elif a_type == "file":
                 self.document = FileRef(
