@@ -979,15 +979,20 @@ async def attach_hw_file(
         file_token = message.document.token
         file_name = message.document.file_name or "файл"
         file_type = "document"
+        file_url = message.document.url
     else:
         file_token = message.photo.token
         file_name = "фото"
         file_type = "photo"
+        file_url = message.photo.url
 
     client_id = int(data.get("hw_client_id") or 0)
     target = data.get("hw_target") or "всей группе"
 
-    db.add_homework_file(lesson_id, file_token, file_name, file_type, client_id=client_id)
+    db.add_homework_file(
+        lesson_id, file_token, file_name, file_type,
+        client_id=client_id, file_url=file_url,
+    )
 
     # Отметка о файле дописывается в текст ДЗ того же адресата, чтобы в
     # карточке было видно, что вложение есть, даже до его загрузки.

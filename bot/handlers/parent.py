@@ -346,10 +346,14 @@ async def parent_homework(
         for f in files:
             await asyncio.sleep(settings.MAX_SEND_DELAY)
             att_type = "image" if f.get("file_type") == "photo" else "file"
+            payload = {"url": f["file_url"]} if f.get("file_url") else {"token": f["file_id"]}
+            if not payload.get("url") and not payload.get("token"):
+                logger.warning(f"У файла ДЗ {f.get('id')} отсутствуют URL и токен")
+                continue
             try:
-                await safe_call(lambda token=f["file_id"], t=att_type: callback.bot.send_message(
+                await safe_call(lambda p=payload, t=att_type: callback.bot.send_message(
                     user_id=callback.from_user.id,
-                    attachments=[{"type": t, "payload": {"token": token}}],
+                    attachments=[{"type": t, "payload": p}],
                 ))
             except Exception as e:
                 logger.warning(f"Не удалось отправить файл ДЗ {f.get('file_id')}: {e}")

@@ -104,17 +104,26 @@ class Msg:
                     ),
                     "",
                 )
+                photo_url = payload.get("url") or next(
+                    (
+                        item.get("url")
+                        for item in photo_tokens.values()
+                        if isinstance(item, dict) and item.get("url")
+                    ),
+                    None,
+                )
                 self.photo = FileRef(
                     token=token,
                     file_name="photo.jpg",
                     kind="image",
-                    url=payload.get("url"),
+                    url=photo_url,
                 )
             elif a_type == "file":
                 self.document = FileRef(
                     token=payload.get("token", ""),
                     file_name=payload.get("filename") or "file",
                     kind="file",
+                    url=payload.get("url"),
                 )
 
         # Адресат ответа — сам отправитель (см. докстринг модуля).

@@ -116,6 +116,15 @@ class ReminderScheduler:
                         status=STATUS_PLANNED, date_from=today_iso, date_to=today_iso,
                         **kwargs,
                     )
+                    if role == "parent":
+                        # Локальная заморозка относится к конкретному
+                        # ребёнку и занятию, поэтому исключаем только её.
+                        lessons = [
+                            lesson for lesson in lessons
+                            if not self.db.get_freeze_for_lesson(
+                                user["crm_id"], lesson.get("id")
+                            )
+                        ]
                     if not lessons:
                         continue
 
@@ -197,6 +206,18 @@ class ReminderScheduler:
                 logger.error(f"Не удалось напомнить преподавателю {teacher['max_user_id']}: {e}")
 
         for customer_id in lesson.get("customer_ids") or []:
+            # Не отправляем напоминание о занятии, которое заморожено для
+            # этого конкретного ученика. Групповое занятие может идти для
+            # остальных участников.
+            try:
+                if self.db.get_freeze_for_lesson(customer_id, lesson_id):
+                    continue
+            except Exception as e:
+                logger.warning(
+                    f"Не удалось проверить заморозку {lesson_id} для {customer_id}; "
+                    f"напоминание пропущено: {e}"
+                )
+                continue
             parent = self.db.get_user_by_crm_id(customer_id, "parent")
             if not parent:
                 continue
@@ -431,7 +452,13 @@ class ReminderScheduler:
                 if self.db.get_freeze_for_lesson(client_id, lesson_id):
                     continue
             except Exception as e:
-                logger.warning(f"Не удалось проверить заморозку {lesson_id}: {e}")
+                # При ошибке проверки лучше пропустить уведомление, чем
+                # сообщить родителю, что замороженное занятие сгорело.
+                logger.warning(
+                    f"Не удалось проверить заморозку {lesson_id} для {client_id}; "
+                    f"уведомление пропущено: {e}"
+                )
+                continue
 
             lesson = await get_lesson_snapshot(
                 lesson_id, self.impulse, self.cache, db=self.db

@@ -71,6 +71,7 @@ class Database:
                     file_id TEXT NOT NULL,
                     file_name TEXT,
                     file_type TEXT DEFAULT 'document',
+                    file_url TEXT,
                     uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
 
@@ -296,6 +297,9 @@ class Database:
                     "ALTER TABLE homework_files ADD COLUMN client_id INTEGER NOT NULL DEFAULT 0"
                 )
                 logger.info("🛠 homework_files: добавлена колонка client_id")
+            if "file_url" not in hw_columns:
+                conn.execute("ALTER TABLE homework_files ADD COLUMN file_url TEXT")
+                logger.info("🛠 homework_files: добавлена колонка file_url")
 
             # Ранее выданное общее ДЗ переносим в новую таблицу как
             # групповое (client_id = 0), иначе родители перестали бы
@@ -435,13 +439,18 @@ class Database:
     def add_homework_file(
         self, lesson_id: Any, file_id: str, file_name: str,
         file_type: str = "document", client_id: int = 0,
+        file_url: Optional[str] = None,
     ):
         """client_id = 0 — файл для всей группы."""
         with self._conn() as conn:
             conn.execute(
                 "INSERT INTO homework_files "
-                "(lesson_id, file_id, file_name, file_type, client_id) VALUES (?,?,?,?,?)",
-                (str(lesson_id), file_id, file_name, file_type, int(client_id or 0)),
+                "(lesson_id, file_id, file_name, file_type, client_id, file_url) "
+                "VALUES (?,?,?,?,?,?)",
+                (
+                    str(lesson_id), file_id, file_name, file_type,
+                    int(client_id or 0), file_url,
+                ),
             )
 
     def get_homework_files(
