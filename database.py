@@ -478,6 +478,16 @@ class Database:
                 ).fetchall()
             return [dict(row) for row in rows]
 
+    def update_homework_file_token(
+        self, file_row_id: int, file_id: str, *, file_url: Optional[str] = None
+    ) -> None:
+        """Заменить входящий токен своим токеном загрузки MAX."""
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE homework_files SET file_id=?, file_url=? WHERE id=?",
+                (file_id, file_url, int(file_row_id)),
+            )
+
     # ==================== ПЕРСОНАЛЬНОЕ ДЗ ====================
     #
     # client_id = 0 означает «всем в группе». Персональное задание

@@ -265,6 +265,54 @@ class MaxBot:
         """upload_type: image | video | audio | file."""
         return await self._request("POST", "/uploads", params={"type": upload_type})
 
+    async def upload_bytes(
+        self, upload_type: str, content: bytes, *, filename: str = "file"
+    ) -> str:
+        """Загрузить медиа в MAX и вернуть токен вложения."""
+        endpoint = await self.get_upload_url(upload_type)
+        upload_url = endpoint.get("url")
+        if not upload_url:
+            raise MaxAPIError("MAX не вернул URL загрузки")
+
+        session = await self._get_session()
+        form = aiohttp.FormData()
+        form.add_field(
+            "data",
+            content,
+            filename=filename or "file",
+            content_type="application/octet-stream",
+        )
+        async with session.post(upload_url, data=form) as response:
+            if response.status >= 400:
+                body = await response.text()
+                raise MaxAPIError(
+                    f"HTTP {response.status} при загрузке вложения: {body[:300]}"
+                )
+            result = await response.json(content_type=None) or {}
+
+        token = result.get("token")
+        if not token:
+            raise MaxAPIError("MAX не вернул токен загруженного вложения")
+        return str(token)
+
+    async def upload_from_url(
+        self, source_url: str, upload_type: str, *, filename: str = "file"
+    ) -> str:
+        """Скачать входящее вложение и загрузить его как своё вложение MAX."""
+        if not source_url:
+            raise MaxAPIError("У входящего вложения отсутствует URL")
+        session = await self._get_session()
+        async with session.get(source_url) as response:
+            if response.status >= 400:
+                body = await response.text()
+                raise MaxAPIError(
+                    f"HTTP {response.status} при скачивании вложения: {body[:300]}"
+                )
+            content = await response.read()
+        if not content:
+            raise MaxAPIError("Входящее вложение пустое")
+        return await self.upload_bytes(upload_type, content, filename=filename)
+
     # ==================== ПОДПИСКИ / LONG POLLING ====================
 
     async def subscribe(

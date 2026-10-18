@@ -13,6 +13,7 @@ bot/handlers/teacher.py — расписание, отчёт, закрытие �
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -40,7 +41,7 @@ from bot.handlers.common import (
     load_customer_map,
     manager_ids,
 )
-from bot.dispatcher import F, Router
+from bot.dispatcher import Cond, F, Router
 from bot.fsm import FSMContext
 from bot.states import DateRangeStates, HomeworkStates, TeacherTransferStates
 from max_api.context import Callback, Msg
@@ -924,7 +925,12 @@ async def _lesson_students(lesson_id, impulse, cache, db):
     ]
 
 
-@router.message(HomeworkStates.waiting_for_text_or_file, F.text)
+@router.message(
+    HomeworkStates.waiting_for_text_or_file,
+    F.text & Cond(
+        lambda message: message.photo is None and message.document is None
+    ),
+)
 async def attach_hw_text(
     message: Msg, state: FSMContext, db: Database, cache: LessonCache
 ) -> None:
@@ -986,6 +992,25 @@ async def attach_hw_file(
         file_type = "photo"
         file_url = message.photo.url
 
+    # Входящий токен MAX не является гарантированно пригодным токеном для
+    # повторной отправки. Перезагружаем фото и файлы в хранилище бота, чтобы
+    # родителям отправлять валидный токен вложения.
+    if file_url:
+        try:
+            file_token = await message.bot.upload_from_url(
+                file_url,
+                "image" if file_type == "photo" else "file",
+                filename=file_name,
+            )
+            file_url = None
+        except Exception as e:
+            logger.warning(f"Не удалось подготовить файл ДЗ к отправке: {e}")
+            await message.answer(
+                "❌ Не удалось сохранить файл для отправки родителю. "
+                "Попробуйте прикрепить его ещё раз."
+            )
+            return
+
     client_id = int(data.get("hw_client_id") or 0)
     target = data.get("hw_target") or "всей группе"
 
@@ -994,18 +1019,28 @@ async def attach_hw_file(
         client_id=client_id, file_url=file_url,
     )
 
-    # Отметка о файле дописывается в текст ДЗ того же адресата, чтобы в
-    # карточке было видно, что вложение есть, даже до его загрузки.
-    existing_hw = (db.get_lesson_homework(lesson_id, client_id) or "").strip()
-    note = f"[📎 {file_name}]"
-    new_hw = f"{existing_hw}\n{note}" if existing_hw else note
-    db.set_lesson_homework(lesson_id, client_id, new_hw, message.from_user.id)
-    if client_id == 0:
-        db.set_lesson_note(lesson_id, homework=new_hw, updated_by=message.from_user.id)
-        await cache.patch_lesson(lesson_id, {"homework": new_hw})
+    # Подпись фото/файла — это обычный текст ДЗ. Технические маркеры старой
+    # версии удаляем: родитель увидит подпись и отдельное вложение, а не
+    # строку вроде «[📎 file]».
+    existing_hw = _strip_file_markers(
+        db.get_lesson_homework(lesson_id, client_id) or ""
+    ).strip()
+    caption = (message.text or "").strip()
+    pieces = [part for part in (existing_hw, caption) if part]
+    new_hw = "\n".join(pieces)
+    if new_hw or existing_hw:
+        db.set_lesson_homework(lesson_id, client_id, new_hw, message.from_user.id)
+        if client_id == 0:
+            db.set_lesson_note(lesson_id, homework=new_hw, updated_by=message.from_user.id)
+            await cache.patch_lesson(lesson_id, {"homework": new_hw})
 
     await message.answer(f"✅ Файл прикреплён ({esc(target)}).", parse_mode="HTML")
     await state.clear()
+
+
+def _strip_file_markers(text: str) -> str:
+    """Удалить служебные маркеры вложений, сохранённые старой версией."""
+    return re.sub(r"\s*\[📎[^\]]*\]", "", text or "")
 
 
 # ==================== ЗАЯВКА НА ПЕРЕНОС ====================

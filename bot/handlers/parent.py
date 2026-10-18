@@ -9,6 +9,7 @@ bot/handlers/parent.py — расписание, ДЗ, баланс, заявк�
 
 import asyncio
 import logging
+import re
 from datetime import date, timedelta
 
 import settings
@@ -316,10 +317,13 @@ async def parent_homework(
     # lesson_notes — get_lesson_homework сам откатывается на групповое,
     # если персонального нет.
     for lesson in lessons:
+        lesson["homework"] = re.sub(
+            r"\s*\[📎[^\]]*\]", "", lesson.get("homework") or ""
+        ).strip()
         if lesson.get("id"):
             personal = db.get_lesson_homework(lesson["id"], user["crm_id"])
             if personal.strip():
-                lesson["homework"] = personal
+                lesson["homework"] = re.sub(r"\s*\[📎[^\]]*\]", "", personal).strip()
 
     lessons_with_hw = [
         l for l in lessons
@@ -346,14 +350,30 @@ async def parent_homework(
         for f in files:
             await asyncio.sleep(settings.MAX_SEND_DELAY)
             att_type = "image" if f.get("file_type") == "photo" else "file"
-            payload = {"url": f["file_url"]} if f.get("file_url") else {"token": f["file_id"]}
-            if not payload.get("url") and not payload.get("token"):
+            file_token = f.get("file_id")
+            # Старые записи содержат входящий MAX token/URL. При первом
+            # просмотре ДЗ переносим файл в хранилище бота и сохраняем
+            # выданный MAX token, чтобы это работало и для старых вложений.
+            if f.get("file_url"):
+                try:
+                    file_token = await callback.bot.upload_from_url(
+                        f["file_url"],
+                        "image" if att_type == "image" else "file",
+                        filename=f.get("file_name") or "file",
+                    )
+                    db.update_homework_file_token(f["id"], file_token)
+                except Exception as e:
+                    logger.warning(
+                        f"Не удалось подготовить файл ДЗ {f.get('id')} к отправке: {e}"
+                    )
+                    continue
+            if not file_token:
                 logger.warning(f"У файла ДЗ {f.get('id')} отсутствуют URL и токен")
                 continue
             try:
-                await safe_call(lambda p=payload, t=att_type: callback.bot.send_message(
+                await safe_call(lambda token=file_token, t=att_type: callback.bot.send_message(
                     user_id=callback.from_user.id,
-                    attachments=[{"type": t, "payload": p}],
+                    attachments=[{"type": t, "payload": {"token": token}}],
                 ))
             except Exception as e:
                 logger.warning(f"Не удалось отправить файл ДЗ {f.get('file_id')}: {e}")
